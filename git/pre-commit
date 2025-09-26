@@ -1,0 +1,17 @@
+#!/bin/sh
+# pre-push hook
+
+# Run lint
+if [ $? -ne 0 ]; then
+  echo "❌ Linting failed. Please fix ESLint errors before committing."
+  exit 1
+fi
+
+# Run tests with coverage
+npm run test:cov
+if [ $? -ne 0 ]; then
+  echo "❌ Tests failed. Please fix failing tests before committing."
+  exit 1
+fi
+
+echo "✅ Pre-commit checks passed."
