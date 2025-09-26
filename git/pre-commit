@@ -1,7 +1,8 @@
 #!/bin/sh
-# pre-push hook
+# pre-commit hook
 
 # Run lint
+npm run lint
 if [ $? -ne 0 ]; then
   echo "❌ Linting failed. Please fix ESLint errors before committing."
   exit 1

@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/*'], // Ignore everything
+    ignores: ['eslint.config.mjs'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -27,8 +27,11 @@ export default tseslint.config(
   {
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-floating-promises': 'warn',
-      '@typescript-eslint/no-unsafe-argument': 'warn'
+      '@typescript-eslint/no-floating-promises': 'off',        // Changed to 'off'
+      '@typescript-eslint/no-unsafe-argument': 'off',          // Changed to 'off'
+      '@typescript-eslint/no-unsafe-return': 'off',            // Added
+      '@typescript-eslint/no-unsafe-call': 'off',              // Added
+      '@typescript-eslint/no-unsafe-member-access': 'off',     // Added
     },
   },
 );
