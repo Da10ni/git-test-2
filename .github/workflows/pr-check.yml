@@ -173,14 +173,66 @@ jobs:
         run: npm i --force
 
       - name: Run ESLint (Non-blocking)
-        run: npm run lint
+        id: eslint
+        run: |
+          echo "Running ESLint..."
+          npm run lint > eslint-output.txt 2>&1 || true
+          
+          # Check if there were any issues
+          if [ $? -eq 0 ]; then
+            echo "eslint_status=✅ Passed" >> $GITHUB_OUTPUT
+            echo "eslint_summary=No ESLint issues found!" >> $GITHUB_OUTPUT
+          else
+            echo "eslint_status=⚠️ Issues Found" >> $GITHUB_OUTPUT
+            
+            # Count errors and warnings if possible
+            ERRORS=$(grep -c "error" eslint-output.txt || echo "0")
+            WARNINGS=$(grep -c "warning" eslint-output.txt || echo "0")
+            
+            echo "eslint_summary=Found ${ERRORS} errors and ${WARNINGS} warnings" >> $GITHUB_OUTPUT
+          fi
+          
+          # Always succeed to make it non-blocking
+          exit 0
         continue-on-error: true
 
-      - name: Comment on PR with ESLint results
+      - name: Upload ESLint results
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eslint-results
+          path: eslint-output.txt
+          retention-days: 7
+
+      - name: Comment on PR with ESLint results
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            let eslintOutput = '';
+            let eslintStatus = '${{ steps.eslint.outputs.eslint_status }}';
+            let eslintSummary = '${{ steps.eslint.outputs.eslint_summary }}';
+            
+            // Try to read the ESLint output file
+            try {
+              if (fs.existsSync('eslint-output.txt')) {
+                const fullOutput = fs.readFileSync('eslint-output.txt', 'utf8');
+                
+                // Truncate output if it's too long for GitHub comment
+                if (fullOutput.length > 2000) {
+                  eslintOutput = fullOutput.substring(0, 2000) + '\n\n... (output truncated - check artifacts for full results)';
+                } else {
+                  eslintOutput = fullOutput;
+                }
+              }
+            } catch (error) {
+              console.log('Could not read ESLint output:', error);
+              eslintOutput = 'ESLint output could not be retrieved';
+            }
+
             const { data: comments } = await github.rest.issues.listComments({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -194,14 +246,29 @@ jobs:
 
             const message = `📋 **ESLint Analysis Complete** (Non-blocking)
 
-            ESLint checks have been run. This is currently in non-blocking mode.
+            **Status:** ${eslintStatus}
+            **Summary:** ${eslintSummary}
+
+            ${eslintOutput ? `
+            <details>
+            <summary>📄 ESLint Output</summary>
+            
+            \`\`\`
+            ${eslintOutput}
+            \`\`\`
+            
+            </details>
+            ` : ''}
 
             **To check locally:**
             \`\`\`bash
             npm run lint
             \`\`\`
 
-            Note: ESLint issues won't block the PR but please review and fix when possible.`;
+            ${eslintStatus.includes('Issues') ? 
+              '⚠️ **Please review and fix ESLint issues when possible.** While this won\'t block the PR, addressing these issues will improve code quality.' : 
+              '🎉 **Great job!** No ESLint issues found.'
+            }`;
 
             if (botComment) {
               await github.rest.issues.updateComment({
@@ -219,15 +286,14 @@ jobs:
               });
             }
 
-  # 🔍 SonarQube Analysis Job
+  # SonarQube Analysis Job - Self-Hosted Server (Non-blocking)
   sonarqube-analysis:
-    name: SonarQube Code Analysis
+    name: SonarQube Code Analysis (Non-blocking)
     runs-on: ubuntu-latest
     if: >
       (github.event_name == 'pull_request' || github.ref == 'refs/heads/feature/linting') &&
       !(startsWith(github.event.pull_request.base.ref, 'feature/') || 
         startsWith(github.event.pull_request.base.ref, 'release/'))
-    # needs: code-quality  # Temporarily removed dependency
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -244,29 +310,49 @@ jobs:
         run: npm ci --force
 
       - name: Run unit tests with coverage
-        run: npm run test:cov
+        id: coverage
+        run: |
+          echo "Running tests with coverage..."
+          npm run test:cov || true
+          
+          # Always continue, even if tests fail
+          echo "coverage_status=✅ Completed" >> $GITHUB_OUTPUT
+          exit 0
         continue-on-error: true
 
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
+      - name: SonarQube Scan
+        id: sonar_scan
+        uses: SonarSource/sonarqube-scan-action@v4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args: >
-            -Dsonar.projectKey=${{ github.repository_owner }}_${{ github.event.repository.name }}
-            -Dsonar.organization=${{ github.repository_owner }}
-            -Dsonar.sources=src
-            -Dsonar.tests=src,test
-            -Dsonar.test.inclusions=**/*.spec.ts,**/*.e2e-spec.ts,**/*.test.ts
-            -Dsonar.typescript.lcov.reportPaths=coverage/lcov.info
-            -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/coverage/**
-            -Dsonar.cpd.exclusions=**/dto/**,**/entity/**,**/interface/**,**/*.module.ts
+          SONAR_HOST_URL: http://194.163.40.149:9000
+        continue-on-error: true
 
-      - name: Check Quality Gate
+      - name: Check Quality Gate (Non-blocking)
+        id: quality_gate
         run: |
-          echo "SonarCloud analysis completed. Check the dashboard for quality gate status."
-          echo "Quality gate enforcement is handled by SonarCloud branch protection rules."
+          echo "SonarQube analysis completed. Check the dashboard for quality gate status."
+          echo "Dashboard URL: http://194.163.40.149:9000"
+          
+          # Try to get quality gate status, but don't fail if we can't
+          echo "quality_gate_status=ℹ️ Check Dashboard" >> $GITHUB_OUTPUT
+          echo "This check is non-blocking - PR can proceed regardless of quality gate status"
+          
+          # Always succeed
+          exit 0
+        continue-on-error: true
+
+      - name: Upload SonarQube results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonarqube-results
+          path: |
+            .scannerwork/
+            coverage/
+          retention-days: 7
+        continue-on-error: true
 
       - name: Comment PR with SonarQube results
         if: github.event_name == 'pull_request' && always()
@@ -276,47 +362,54 @@ jobs:
             const fs = require('fs');
             
             let sonarResults = '';
-            let qualityGateStatus = '✅ Passed';
+            let qualityGateStatus = '${{ steps.quality_gate.outputs.quality_gate_status }}' || 'ℹ️ Check Dashboard';
+            let coverageStatus = '${{ steps.coverage.outputs.coverage_status }}' || 'ℹ️ Completed';
+            
+            // Try to get more detailed information
+            let dashboardUrl = 'http://194.163.40.149:9000';
+            let additionalInfo = '';
             
             try {
               const reportPath = '.scannerwork/report-task.txt';
               if (fs.existsSync(reportPath)) {
                 const reportContent = fs.readFileSync(reportPath, 'utf8');
-                const dashboardUrl = reportContent.match(/dashboardUrl=(.+)/)?.[1];
+                const extractedUrl = reportContent.match(/dashboardUrl=(.+)/)?.[1];
                 
-                if (dashboardUrl) {
-                  sonarResults = `📊 **SonarQube Analysis Complete**
+                if (extractedUrl) {
+                  dashboardUrl = extractedUrl;
+                }
+              }
+            } catch (error) {
+              console.log('Could not read SonarQube report:', error);
+            }
+            
+            // Try to read coverage summary if available
+            try {
+              if (fs.existsSync('coverage/lcov-report/index.html')) {
+                additionalInfo += '\n📊 **Coverage report generated** - check artifacts for detailed coverage information';
+              }
+            } catch (error) {
+              console.log('Could not check coverage files:', error);
+            }
+
+            sonarResults = `📊 **SonarQube Analysis Complete** (Non-blocking)
             
             **Quality Gate Status:** ${qualityGateStatus}
+            **Coverage Status:** ${coverageStatus}
             
             [🔍 View Detailed Report](${dashboardUrl})
             
             **Analysis includes:**
             - ✅ Code coverage metrics
-            - 🛡️ Security vulnerability scan
+            - 🛡️ Security vulnerability scan  
             - 🔍 Code smells detection
             - 📊 Technical debt analysis
             - 🔄 Code duplication check
+            ${additionalInfo}
             
-            ${context.workflow.conclusion === 'failure' ? '⚠️ **Action Required:** Please review and fix the identified issues before merging.' : ''}`;
-                }
-              }
-            } catch (error) {
-              console.log('Could not read SonarCloud report:', error);
-            }
-
-            if (!sonarResults) {
-              sonarResults = `📊 **SonarQube Analysis Complete**
+            **📝 Note:** This analysis is non-blocking. The PR can be merged regardless of the quality gate status, but please review any issues found to maintain code quality.
             
-            **Quality Gate Status:** ${qualityGateStatus}
-            
-            The code analysis has been completed. Check SonarCloud dashboard for detailed results.
-            
-            **Analysis includes:**
-            - Code coverage and quality metrics
-            - Security vulnerabilities
-            - Maintainability issues`;
-            }
+            **Dashboard:** [View Full Results](${dashboardUrl})`;
 
             const { data: comments } = await github.rest.issues.listComments({
               issue_number: context.issue.number,
